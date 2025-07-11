@@ -1,0 +1,7 @@
+- name: egypt-latest
+  url: https://download.geofabrik.de/africa/egypt-latest.osm.pbf
+  path: africa/egypt-latest.osm.pbf
+#
+#- name: saudi-arabia-latest
+#  url: https://download.geofabrik.de/asia/gcc-states-latest.osm.pbf
+#  path: gcc-states-latest.osm.pbf
