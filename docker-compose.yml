@@ -97,6 +97,7 @@ services:
     depends_on:
       - nats
       - postgis
+      - parser
     environment:
       - NATS_URL=nats://nats:4222
       - PG_DSN=postgres://postgres:postgres@postgis:5432/osm?sslmode=disable
@@ -105,21 +106,22 @@ services:
     volumes:
       - ./config:/config:ro      # <- new read-only bind mount
       - ./osmdata:/data:ro       # PBF cache
-#  indexer:
-#    build:
-#      context: ./services/indexer
-#    depends_on:
-#      - nats
-#      - elasticsearch
-#      - typesense
-#    environment:
-#      - NATS_URL=nats://nats:4222
-#      - ES_HOST=http://elasticsearch:9200
-#      - TS_HOST=http://typesense:8108
-#      - TS_API_KEY=xyz
-#    networks:
-#      - backend
-#
+  indexer:
+    build:
+      context: .
+      dockerfile: services/indexer/Dockerfile
+    depends_on:
+      - nats
+      - elasticsearch
+      - typesense
+    environment:
+      - NATS_URL=nats://nats:4222
+      - ES_HOST=http://elasticsearch:9200
+      - TS_HOST=http://typesense:8108
+      - TS_API_KEY=xyz
+    networks:
+      - backend
+
 #  updater:
 #    build:
 #      context: ./services/updater
