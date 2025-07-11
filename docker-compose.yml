@@ -27,7 +27,11 @@ services:
       - es-data:/usr/share/elasticsearch/data
     networks:
       - backend
-
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
   typesense:
     image: typesense/typesense:0.25.1
     container_name: typesense
@@ -42,7 +46,10 @@ services:
       - ts-data:/data
     networks:
       - backend
-
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8108/health/ready"]
+      interval: 10s
+      retries: 5
   postgis:
     image: postgis/postgis:16-3.4
     container_name: postgis

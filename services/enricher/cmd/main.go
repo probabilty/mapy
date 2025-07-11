@@ -26,12 +26,12 @@ type ParseEvent struct {
 
 // EnrichedFeature is the payload sent for indexing
 type EnrichedFeature struct {
-	ID         int64             `json:"id"`
-	Type       string            `json:"type"`     // POINT, LINESTRING, POLYGON
-	Geometry   string            `json:"geometry"` // WKT representation
-	Tags       map[string]string `json:"tags"`
-	Parents    []ParentInfo      `json:"parents"` // sorted by area desc
-	StreetName string            `json:"street,omitempty"`
+	ID          int64             `json:"id"`
+	Type        string            `json:"type"`     // POINT, LINESTRING, POLYGON
+	Geometry    string            `json:"geometry"` // WKT representation
+	Tags        map[string]string `json:"tags"`
+	Parents     []ParentInfo      `json:"parents"` // sorted by area desc
+	StreetNames map[string]string `json:"streets,omitempty"`
 }
 
 // ParentInfo holds parent polygon details
@@ -131,7 +131,6 @@ func enrichFile(db *sql.DB, js nats.JetStreamContext, ev ParseEvent) error {
 			items = append(items, o)
 		}
 	}
-
 	// Process features in sequence
 	for _, v := range items {
 		switch o := v.(type) {
@@ -165,6 +164,10 @@ func enrichFile(db *sql.DB, js nats.JetStreamContext, ev ParseEvent) error {
 // publishFeature enriches a single feature and publishes it
 func publishFeature(db *sql.DB, js nats.JetStreamContext, id int64, geomType, wkt string, tags map[string]string, nodes map[int64][2]float64, tableName string) error {
 	// 1) Parents: polygons containing this feature, sorted by area desc
+	if len(tags) == 0 {
+		//log.Printf("skip feature %d (%s): no tags", id, geomType)
+		return nil
+	}
 	parentRows, err := db.Query(
 		`SELECT id, geom_type, names, admin_level FROM `+tableName+`
          WHERE geom_type='POLYGON' AND ST_Contains(geom, ST_GeomFromText($1,4326))
@@ -186,27 +189,39 @@ func publishFeature(db *sql.DB, js nats.JetStreamContext, id int64, geomType, wk
 	}
 
 	// 2) Street name for points: nearest LINESTRING
-	street := ""
+	var raw []byte
+	streets := make(map[string]string)
 	if geomType == "POINT" {
-		//var ssql string
 		err := db.QueryRow(
-			`SELECT names->>'default' FROM `+tableName+`
-             WHERE geom_type='LINESTRING'
-             ORDER BY geom <-> ST_GeomFromText($1,4326)
-             LIMIT 1`, wkt).Scan(&street)
+			`SELECT names FROM `+tableName+`
+            WHERE geom_type='LINESTRING'
+            ORDER BY geom <-> ST_GeomFromText($1,4326)
+            LIMIT 1`, wkt,
+		).Scan(&raw)
 		if err != nil && err != sql.ErrNoRows {
-			return fmt.Errorf("nearest line: %w", err)
+			return fmt.Errorf("nearest line fetch: %w", err)
+		}
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &streets); err != nil {
+				return fmt.Errorf("unmarshal street names: %w", err)
+			}
+			// ensure default key always exists
+			if _, ok := streets["default"]; !ok {
+				for _, v := range streets {
+					streets["default"] = v
+					break
+				}
+			}
 		}
 	}
-
 	// 3) Assemble enriched payload
 	feat := EnrichedFeature{
-		ID:         id,
-		Type:       geomType,
-		Geometry:   wkt,
-		Tags:       tags,
-		Parents:    parents,
-		StreetName: street,
+		ID:          id,
+		Type:        geomType,
+		Geometry:    wkt,
+		Tags:        tags,
+		Parents:     parents,
+		StreetNames: streets,
 	}
 	data, err := json.Marshal(feat)
 	if err != nil {
