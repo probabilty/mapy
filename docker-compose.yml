@@ -64,7 +64,6 @@ services:
       dockerfile: services/downloader/Dockerfile
     depends_on:
       - nats
-      - postgis
     environment:
       - NATS_URL=nats://nats:4222
       - PG_DSN=postgres://postgres:postgres@postgis:5432/osm?sslmode=disable
@@ -74,30 +73,38 @@ services:
     volumes:
       - ./config:/config:ro      # <- new read-only bind mount
       - ./osmdata:/data            # PBF cache
-#  parser:
-#    build:
-#      context: ./services/parser
-#    depends_on:
-#      - nats
-#      - postgis
-#    environment:
-#      - NATS_URL=nats://nats:4222
-#      - PG_DSN=postgres://postgres:postgres@postgis:5432/osm?sslmode=disable
-#    networks:
-#      - backend
-#
-#  enricher:
-#    build:
-#      context: ./services/enricher
-#    depends_on:
-#      - nats
-#      - elasticsearch
-#      - typesense
-#    environment:
-#      - NATS_URL=nats://nats:4222
-#    networks:
-#      - backend
-#
+  parser:
+    build:
+      context: .
+      dockerfile: services/parser/Dockerfile
+    depends_on:
+      - nats
+      - postgis
+      - downloader
+    environment:
+      - NATS_URL=nats://nats:4222
+      - PG_DSN=postgres://postgres:postgres@postgis:5432/osm?sslmode=disable
+    networks:
+      - backend
+    volumes:
+      - ./config:/config:ro      # <- new read-only bind mount
+      - ./osmdata:/data:ro       # PBF cache
+
+  enricher:
+    build:
+      context: .
+      dockerfile: services/enricher/Dockerfile
+    depends_on:
+      - nats
+      - postgis
+    environment:
+      - NATS_URL=nats://nats:4222
+      - PG_DSN=postgres://postgres:postgres@postgis:5432/osm?sslmode=disable
+    networks:
+      - backend
+    volumes:
+      - ./config:/config:ro      # <- new read-only bind mount
+      - ./osmdata:/data:ro       # PBF cache
 #  indexer:
 #    build:
 #      context: ./services/indexer

@@ -55,7 +55,18 @@ func main() {
 		log.Fatalf("connect nats: %v", err)
 	}
 	defer nc.Drain()
+	// Create JetStream context
+	js, err := nc.JetStream()
+	if err != nil {
+		log.Fatalf("JetStream context error: %v", err)
+	}
 
+	// Ensure stream exists for our download events
+	_, err = js.AddStream(&nats.StreamConfig{
+		Name:     "MAPY_STREAM",
+		Subjects: []string{"mapy.>"},
+		Storage:  nats.FileStorage,
+	})
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -128,7 +139,7 @@ func handleSource(ctx context.Context, nc *nats.Conn, dataDir string, s Source) 
 		FinishedAt: time.Now().UTC(),
 	}
 	payload, _ := json.Marshal(evt)
-	if err := nc.Publish("osm.download."+status, payload); err != nil {
+	if err := nc.Publish("mapy.osm.download."+status, payload); err != nil {
 		return fmt.Errorf("publish: %w", err)
 	}
 	return nil

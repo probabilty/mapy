@@ -1,4 +1,4 @@
-- name: egypt-latest
+- name: egypt_latest
   url: https://download.geofabrik.de/africa/egypt-latest.osm.pbf
   path: africa/egypt-latest.osm.pbf
 #
