@@ -83,12 +83,43 @@ func main() {
 	}
 
 	if esExistsRes.StatusCode == 404 {
-		createRes, err := es.Indices.Create("places")
+		// Create with a mapping that includes search_text
+		mapping := `{
+      "mappings": {
+        "properties": {
+          "search_text": {
+            "type":     "text",
+            "analyzer": "standard"
+          }
+        }
+      }
+    }`
+		_, err := es.Indices.Create(
+			"places",
+			es.Indices.Create.WithBody(strings.NewReader(mapping)),
+		)
 		if err != nil {
 			log.Fatalf("ES create index error: %v", err)
 		}
-		createRes.Body.Close()
-		log.Println("Created Elasticsearch index 'places'")
+		log.Println("Created Elasticsearch index 'places' with search_text")
+	} else {
+		// If the index already existed, ensure it has our field
+		putMap := `{
+      "properties": {
+        "search_text": {
+          "type":     "text",
+          "analyzer": "standard"
+        }
+      }
+    }`
+		_, err := es.Indices.PutMapping(
+			[]string{"places"},
+			strings.NewReader(putMap),
+		)
+		if err != nil {
+			log.Fatalf("ES put-mapping search_text error: %v", err)
+		}
+		log.Println("Ensured search_text field exists on 'places'")
 	}
 	// Connect Typesense
 	ts := typesense.NewClient(
@@ -113,6 +144,7 @@ func main() {
 				{Name: "wiki", Type: "object"},
 				{Name: "contact", Type: "object"},
 				{Name: "images", Type: "object"},
+				{Name: "search_text", Type: "string"},
 			},
 			EnableNestedFields: &enableNested,
 		}
@@ -244,6 +276,15 @@ func main() {
 			}
 		}
 		id := fmt.Sprintf("%d", feat.ID)
+		var parts []string
+		for _, nm := range names {
+			parts = append(parts, nm)
+		}
+		for _, addr := range addresses {
+			parts = append(parts, addr)
+		}
+		searchText := strings.Join(parts, " ")
+
 		// Build index document
 		doc := map[string]interface{}{
 			"id":          id,
@@ -255,6 +296,7 @@ func main() {
 			"wiki":        wikipedia,
 			"contact":     contacts,
 			"images":      images,
+			"search_text": searchText,
 		}
 		if len(doc["names"].(map[string]string)) < 1 {
 			return
@@ -262,6 +304,7 @@ func main() {
 		if len(doc["addresses"].(map[string]string)) < 1 {
 			return
 		}
+
 		// Marshal document
 		body, err := json.Marshal(doc)
 		if err != nil {
