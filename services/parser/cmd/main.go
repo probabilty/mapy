@@ -90,6 +90,28 @@ func main() {
 			log.Fatalf("Error creating places table: %v", err)
 		}
 		log.Printf("Received download event: %s (%s)", ev.Name, ev.Status)
+		var exists bool
+		checkIdx := `SELECT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE schemaname = current_schema()
+              AND tablename = $1
+              AND indexname = $2
+        )`
+		idxName := "idx_places_geom"
+		if err := db.QueryRow(checkIdx, ev.Name, idxName).Scan(&exists); err != nil {
+			log.Printf("Error checking index %s on %s: %v", idxName, ev.Name, err)
+		}
+		if exists {
+			log.Printf("Index %s already exists on %s, skipping parse", idxName, ev.Name)
+			// Publish parse completed
+			evt := map[string]string{"name": ev.Name, "path": ev.Path}
+			data, _ := json.Marshal(evt)
+			if _, err := js.Publish("mapy.osm.parse.completed", data); err != nil {
+				log.Printf("Publish parse.completed error: %v", err)
+			}
+			msg.Ack()
+			return
+		}
 		if err := processFile(db, ev.Path, ev.Name); err != nil {
 			log.Printf("Error processing file %s: %v", ev.Path, err)
 		} else {
@@ -99,15 +121,15 @@ func main() {
 				Path string `json:"path"`
 			}{ev.Name, ev.Path}
 			data, _ := json.Marshal(parseEvent)
-			if _, err := js.Publish("osm.parse.polygon.completed", data); err != nil {
+			if _, err := js.Publish("mapy.osm.parse.polygon.completed", data); err != nil {
 				log.Printf("Publish parse.completed error: %v", err)
 			}
 		}
 		// Add indexes for performance
-		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_places_id ON places(id)`); err != nil {
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_places_id ON ` + ev.Name + `(id)`); err != nil {
 			log.Fatalf("Error creating index on id: %v", err)
 		}
-		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_places_geom ON places USING GIST(geom)`); err != nil {
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_places_geom ON ` + ev.Name + ` USING GIST(geom)`); err != nil {
 			log.Fatalf("Error creating GIST index on geom: %v", err)
 		}
 		msg.Ack()

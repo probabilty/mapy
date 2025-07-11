@@ -9,7 +9,12 @@ services:
       - '8222:8222'   # monitoring
     networks:
       - backend
-
+#    healthcheck:
+#      test: ["CMD", "wget", "-q", "-S", "-O", "-", "http://localhost:8222/healthz"]
+#      interval: 14s
+#      timeout: 3s
+#      retries: 60
+#      start_period: 3s
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.14.1
     container_name: elasticsearch
@@ -23,26 +28,33 @@ services:
         hard: -1
     ports:
       - '9200:9200'
-    volumes:
-      - es-data:/usr/share/elasticsearch/data
+#    volumes:
+#      - ./es-data:/usr/share/elasticsearch/data
     networks:
       - backend
-
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200"]
+      interval: 10s
+      timeout: 10s
+      retries: 50
   typesense:
     image: typesense/typesense:0.25.1
     container_name: typesense
     command: >
-      --data-dir=/data
+      --data-dir=.
       --listen-port=8108
       --api-key=xyz
       --enable-cors
     ports:
       - '8108:8108'
-    volumes:
-      - ts-data:/data
+#    volumes:
+#      - ./ts-data:/data
     networks:
       - backend
-
+#    healthcheck:
+#      test: ["CMD", "curl", "--fail", "http://localhost:8108/health/ready"]
+#      interval: 10s
+#      retries: 50
   postgis:
     image: postgis/postgis:16-3.4
     container_name: postgis
@@ -97,6 +109,7 @@ services:
     depends_on:
       - nats
       - postgis
+      - parser
     environment:
       - NATS_URL=nats://nats:4222
       - PG_DSN=postgres://postgres:postgres@postgis:5432/osm?sslmode=disable
@@ -105,21 +118,22 @@ services:
     volumes:
       - ./config:/config:ro      # <- new read-only bind mount
       - ./osmdata:/data:ro       # PBF cache
-#  indexer:
-#    build:
-#      context: ./services/indexer
-#    depends_on:
-#      - nats
-#      - elasticsearch
-#      - typesense
-#    environment:
-#      - NATS_URL=nats://nats:4222
-#      - ES_HOST=http://elasticsearch:9200
-#      - TS_HOST=http://typesense:8108
-#      - TS_API_KEY=xyz
-#    networks:
-#      - backend
-#
+  indexer:
+    build:
+      context: .
+      dockerfile: services/indexer/Dockerfile
+    depends_on:
+      - nats
+      - elasticsearch
+      - typesense
+    environment:
+      - NATS_URL=nats://nats:4222
+      - ES_HOST=http://elasticsearch:9200
+      - TS_HOST=http://typesense:8108
+      - TS_API_KEY=xyz
+    networks:
+      - backend
+
 #  updater:
 #    build:
 #      context: ./services/updater
