@@ -1,0 +1,202 @@
+services:
+  # -------------------- Core Infrastructure --------------------
+  nats:
+    image: nats:2.10-alpine
+    container_name: nats
+    command: ['-js', '--server_name=dev-nats']
+    ports:
+      - '4222:4222'   # client
+      - '8222:8222'   # monitoring
+    networks:
+      - backend
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.14.1
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - '9200:9200'
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    networks:
+      - backend
+
+  typesense:
+    image: typesense/typesense:0.25.1
+    container_name: typesense
+    command: >
+      --data-dir=/data
+      --listen-port=8108
+      --api-key=xyz
+      --enable-cors
+    ports:
+      - '8108:8108'
+    volumes:
+      - ts-data:/data
+    networks:
+      - backend
+
+  postgis:
+    image: postgis/postgis:16-3.4
+    container_name: postgis
+    environment:
+      POSTGRES_DB: osm
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - '5432:5432'
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    networks:
+      - backend
+
+  # -------------------- Backend Micro‑services --------------------
+  downloader:
+    build:
+      context: .
+      dockerfile: services/downloader/Dockerfile
+    depends_on:
+      - nats
+      - postgis
+    environment:
+      - NATS_URL=nats://nats:4222
+      - PG_DSN=postgres://postgres:postgres@postgis:5432/osm?sslmode=disable
+      - OSM_CONFIG=/config/osm.yml
+    networks:
+      - backend
+    volumes:
+      - ./config:/config:ro      # <- new read-only bind mount
+      - ./osmdata:/data            # PBF cache
+  parser:
+    build:
+      context: ./services/parser
+    depends_on:
+      - nats
+      - postgis
+    environment:
+      - NATS_URL=nats://nats:4222
+      - PG_DSN=postgres://postgres:postgres@postgis:5432/osm?sslmode=disable
+    networks:
+      - backend
+#
+#  enricher:
+#    build:
+#      context: ./services/enricher
+#    depends_on:
+#      - nats
+#      - elasticsearch
+#      - typesense
+#    environment:
+#      - NATS_URL=nats://nats:4222
+#    networks:
+#      - backend
+#
+#  indexer:
+#    build:
+#      context: ./services/indexer
+#    depends_on:
+#      - nats
+#      - elasticsearch
+#      - typesense
+#    environment:
+#      - NATS_URL=nats://nats:4222
+#      - ES_HOST=http://elasticsearch:9200
+#      - TS_HOST=http://typesense:8108
+#      - TS_API_KEY=xyz
+#    networks:
+#      - backend
+#
+#  updater:
+#    build:
+#      context: ./services/updater
+#    depends_on:
+#      - nats
+#    environment:
+#      - NATS_URL=nats://nats:4222
+#    networks:
+#      - backend
+#
+#  fast-search-svc:
+#    build:
+#      context: ./services/fast-search-svc
+#    depends_on:
+#      - typesense
+#    environment:
+#      - TYPESENSE_HOST=http://typesense:8108
+#      - TYPESENSE_API_KEY=xyz
+#    ports:
+#      - '7001:8080'
+#    networks:
+#      - backend
+#
+#  deep-search-svc:
+#    build:
+#      context: ./services/deep-search-svc
+#    depends_on:
+#      - elasticsearch
+#    environment:
+#      - ES_HOST=http://elasticsearch:9200
+#    ports:
+#      - '7002:8080'
+#    networks:
+#      - backend
+#
+#  provider-proxy:
+#    build:
+#      context: ./services/provider-proxy
+#    depends_on:
+#      - nats
+#    environment:
+#      - NATS_URL=nats://nats:4222
+#    ports:
+#      - '7003:8080'
+#    networks:
+#      - backend
+#
+#  writer-svc:
+#    build:
+#      context: ./services/writer-svc
+#    depends_on:
+#      - nats
+#      - postgis
+#    environment:
+#      - NATS_URL=nats://nats:4222
+#      - PG_DSN=postgres://postgres:postgres@postgis:5432/osm?sslmode=disable
+#    networks:
+#      - backend
+#
+#  api-gateway:
+#    build:
+#      context: ./services/api-gateway
+#    depends_on:
+#      - fast-search-svc
+#      - deep-search-svc
+#      - provider-proxy
+#      - writer-svc
+#    environment:
+#      - NATS_URL=nats://nats:4222
+#      - PORT=8080
+#      - FAST_SEARCH_URL=http://fast-search-svc:8080
+#      - DEEP_SEARCH_URL=http://deep-search-svc:8080
+#      - PROVIDER_PROXY_URL=http://provider-proxy:8080
+#      - WRITER_URL=http://writer-svc:8080
+#    ports:
+#      - '8080:8080'
+#    networks:
+#      - backend
+
+# -------------------- Volumes & Network --------------------
+volumes:
+  es-data:
+  ts-data:
+  pg-data:
+
+networks:
+  backend:
