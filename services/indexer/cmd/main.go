@@ -22,23 +22,20 @@ import (
 
 // Parent holds minimal parent polygon info
 type Parent struct {
-	ID       int64             `json:"id"`
-	Names    map[string]string `json:"names"`
-	Admin    string            `json:"admin_level"`
-	Geometry string            `json:"geometry"`
+	ID         int64             `json:"id"`
+	Type       string            `json:"type"`
+	Names      map[string]string `json:"names"`
+	AdminLevel string            `json:"admin_level"`
 }
 
 // EnrichedFeature as published by enricher service
 type EnrichedFeature struct {
-	ID       int64             `json:"id"`
-	Type     string            `json:"type"`     // POINT, LINESTRING, POLYGON
-	Geometry string            `json:"geometry"` // WKT
-	Tags     map[string]string `json:"tags"`     // original OSM tags
-	Names    map[string]string `json:"names"`    // default + localized names
-	Street   map[string]string `json:"street"`   // localized street names for points
-	Parents  []Parent          `json:"parents"`  // sorted by area
-	Wiki     string            `json:"wiki,omitempty"`
-	Contact  map[string]string `json:"contact,omitempty"`
+	ID          int64             `json:"id"`
+	Type        string            `json:"type"`     // POINT, LINESTRING, POLYGON
+	Geometry    string            `json:"geometry"` // WKT representation
+	Tags        map[string]string `json:"tags"`
+	Parents     []Parent          `json:"parents"` // sorted by area desc
+	StreetNames map[string]string `json:"streets,omitempty"`
 }
 
 func waitForES(es *elasticsearch.Client, maxAttempts int) error {
@@ -79,7 +76,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Elasticsearch connect error: %v", err)
 	}
-	waitForES(es, 60)
+	waitForES(es, 600)
 	esExistsRes, err := es.Indices.Exists([]string{"places"})
 	if err != nil {
 		log.Fatalf("ES exists check error: %v", err)
@@ -98,10 +95,12 @@ func main() {
 		typesense.WithServer(*tsURL),
 		typesense.WithAPIKey(*tsKey),
 	)
-	waitForTS(context.Background(), ts, 60)
-	id := "id"
+	waitForTS(context.Background(), ts, 600)
 	ctx := context.Background()
-	if _, err := ts.Collections().Retrieve(ctx); err != nil {
+	// Ensure Typesense collection “places” exists
+	if _, err := ts.Collection("places").Retrieve(ctx); err != nil {
+		enableNested := true
+		log.Println("Typesense collection ‘places’ not found, creating…")
 		schema := &api.CollectionSchema{
 			Name: "places",
 			Fields: []api.Field{
@@ -110,11 +109,12 @@ func main() {
 				{Name: "geometry", Type: "string"},
 				{Name: "names", Type: "object"},
 				{Name: "addresses", Type: "object"},
-				{Name: "place_type", Type: "string"},
-				{Name: "wiki", Type: "string"},
+				{Name: "place_types", Type: "string[]"},
+				{Name: "wiki", Type: "object"},
 				{Name: "contact", Type: "object"},
+				{Name: "images", Type: "object"},
 			},
-			DefaultSortingField: &id,
+			EnableNestedFields: &enableNested,
 		}
 		if _, err := ts.Collections().Create(ctx, schema); err != nil {
 			log.Fatalf("TS create collection error: %v", err)
@@ -150,12 +150,30 @@ func main() {
 			msg.Ack()
 			return
 		}
+		names := make(map[string]string)
+		for k, v := range feat.Tags {
+			if strings.Contains(k, "name") {
+				key := dropBeforeColon(k)
+				names[key] = v
+			}
+		}
+		if len(names) == 0 {
+			msg.Ack()
+			return
+		}
+		contacts := make(map[string]string)
+		for k, v := range feat.Tags {
+			if strings.Contains(k, "contact") {
+				key := dropBeforeColon(k)
+				contacts[key] = v
+			}
+		}
 
 		// Build address strings per language
 		addresses := make(map[string]string)
 		// collect all languages
 		langs := map[string]struct{}{}
-		for lang := range feat.Names {
+		for lang := range names {
 			langs[lang] = struct{}{}
 		}
 		for _, p := range feat.Parents {
@@ -175,9 +193,9 @@ func main() {
 			}
 			// street for points
 			if feat.Type == "POINT" {
-				street := feat.Street[lang]
+				street := feat.StreetNames[lang]
 				if street == "" {
-					street = feat.Street["default"]
+					street = feat.StreetNames["default"]
 				}
 				if street != "" {
 					parts = append(parts, street)
@@ -187,7 +205,7 @@ func main() {
 		}
 
 		// Skip if no names and no addresses
-		if len(feat.Names) == 0 && len(addresses) == 0 {
+		if len(addresses) == 0 {
 			//log.Printf("Skipping feature %d: no names or addresses", feat.ID)
 			msg.Ack()
 			return
@@ -211,18 +229,39 @@ func main() {
 		if len(placeTypes) == 0 {
 			placeTypes = append(placeTypes, feat.Type)
 		}
+		images := make(map[string]string)
+		for k, v := range feat.Tags {
+			if strings.Contains(feat.Type, "image") {
+				key := dropBeforeColon(k)
+				images[key] = v
+			}
+		}
+		wikipedia := make(map[string]string)
+		for k, v := range feat.Tags {
+			if strings.Contains(k, "wikipedia") {
+				key := dropBeforeColon(k)
+				wikipedia[key] = v
+			}
+		}
+		id := fmt.Sprintf("%d", feat.ID)
 		// Build index document
 		doc := map[string]interface{}{
-			"id":         feat.ID,
-			"type":       feat.Type,
-			"geometry":   feat.Geometry,
-			"names":      feat.Names,
-			"addresses":  addresses,
-			"place_type": placeTypes,
-			"wiki":       feat.Wiki,
-			"contact":    feat.Contact,
+			"id":          id,
+			"type":        feat.Type,
+			"geometry":    feat.Geometry,
+			"names":       names,
+			"addresses":   addresses,
+			"place_types": placeTypes,
+			"wiki":        wikipedia,
+			"contact":     contacts,
+			"images":      images,
 		}
-		log.Println(doc)
+		if len(doc["names"].(map[string]string)) < 1 {
+			return
+		}
+		if len(doc["addresses"].(map[string]string)) < 1 {
+			return
+		}
 		// Marshal document
 		body, err := json.Marshal(doc)
 		if err != nil {
@@ -264,4 +303,11 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 	log.Println("Shutting down indexer...")
+}
+func dropBeforeColon(s string) string {
+	parts := strings.SplitN(s, ":", 2)
+	if len(parts) == 2 {
+		return parts[1]
+	}
+	return s
 }
