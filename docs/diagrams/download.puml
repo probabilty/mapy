@@ -1,0 +1,32 @@
+@startuml
+!theme plain
+'==============================
+' DOWNLOAD FLOW – SEQUENCE DIAGRAM
+'==============================
+actor Dev as Dev
+storage "Config (YAML)" as CFG
+component "Downloader Service" as DL
+cloud "OSM Mirror (Geofabrik)" as OSM
+folder "Shared Volume /data" as VOL
+queue "NATS JetStream" as NATS
+
+Dev --> CFG : Define/Update
+CFG -[#grey]-> DL : load config on start
+
+DL -> OSM : HTTPS GET *.osm.pbf
+OSM --> DL : .osm.pbf file bytes
+DL -> VOL : write file
+DL -> DL : verify checksum & decompress (if bz2)
+alt OK
+  DL -> NATS : Publish DownloadCompleted
+  note right: message {
+    dataset: "egypt-latest.osm.pbf",
+    path: "/data/egypt-latest.osm.pbf",
+    size: 257 MB,
+    sha256: "…"
+  }
+else Failure
+  DL -> DL : exponential back‑off & retry
+end
+
+@enduml
