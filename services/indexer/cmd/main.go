@@ -283,10 +283,10 @@ func main() {
 		for _, addr := range addresses {
 			parts = append(parts, addr)
 		}
+		parts = DeduplicateStrings(parts)
 		searchText := strings.Join(parts, " ")
-
 		// Build index document
-		doc := map[string]interface{}{
+		esDoc := map[string]interface{}{
 			"id":          id,
 			"type":        feat.Type,
 			"geometry":    feat.Geometry,
@@ -298,15 +298,23 @@ func main() {
 			"images":      images,
 			"search_text": searchText,
 		}
-		if len(doc["names"].(map[string]string)) < 1 {
+		tsDoc := map[string]interface{}{
+			"id":          id,
+			"geometry":    feat.Geometry,
+			"names":       names,
+			"addresses":   addresses,
+			"place_types": placeTypes,
+			"search_text": parts,
+		}
+		if len(esDoc["names"].(map[string]string)) < 1 {
 			return
 		}
-		if len(doc["addresses"].(map[string]string)) < 1 {
+		if len(esDoc["addresses"].(map[string]string)) < 1 {
 			return
 		}
 
 		// Marshal document
-		body, err := json.Marshal(doc)
+		body, err := json.Marshal(esDoc)
 		if err != nil {
 			log.Printf("JSON marshal error: %v", err)
 			msg.Ack()
@@ -328,7 +336,7 @@ func main() {
 		}
 
 		// Upsert into Typesense
-		if _, err := ts.Collection("places").Documents().Upsert(context.Background(), doc); err != nil {
+		if _, err := ts.Collection("places").Documents().Upsert(context.Background(), tsDoc); err != nil {
 			log.Printf("TS upsert error: %v", err)
 		}
 
@@ -353,4 +361,20 @@ func dropBeforeColon(s string) string {
 		return parts[1]
 	}
 	return s
+}
+
+// DeduplicateStrings returns a new slice containing the unique elements
+// of input, in the same order they first appear.
+func DeduplicateStrings(input []string) []string {
+	seen := make(map[string]bool, len(input))
+	result := make([]string, 0, len(input))
+
+	for _, s := range input {
+		if !seen[s] {
+			seen[s] = true
+			result = append(result, s)
+		}
+	}
+
+	return result
 }
